@@ -1,4 +1,4 @@
-// Kuch Kuch Hota Hai piano page: Listen mode (play-along) and Teacher mode (mic listens, corrects, repeats).
+// Piano practice page (shared by every song folder): Listen mode (play-along) and Teacher mode (mic listens, corrects, repeats).
 // Reviewed by Codex 2026-11-23; fixes for its findings are tagged [R#].
 (function () {
 const { LINES, ORDER, buildAbc, midiName } = window.SONG;
@@ -42,18 +42,21 @@ function scrollToLine(li) {
 
 // ---------- keyboard ----------
 const kbd = $("kbd");
-const whites = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77];
-const wl = { 60: "C", 62: "D", 64: "E", 65: "F", 67: "G", 69: "A", 71: "B", 72: "C+", 74: "D+", 76: "E+", 77: "F+" };
-const blacks = { 61: 0, 63: 1, 66: 3, 68: 4, 70: 5, 73: 7, 75: 8 };
+const whites = window.SONG.WHITES || [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77];
+const WL = { 0: "C", 2: "D", 4: "E", 5: "F", 7: "G", 9: "A", 11: "B" };
+const wl = m => (window.SONG.KEY_LABELS || {})[m] || WL[m % 12] + (m >= 72 ? "+" : "");
 const used = new Set(Object.values(window.SONG.MIDI));
 const keyEl = {}; const ww = 100 / whites.length;
 whites.forEach((m, i) => { const k = document.createElement("div"); k.className = "wk" + (used.has(m) ? " used" : "");
-  k.style.left = (i * ww) + "%"; k.style.width = ww + "%"; k.textContent = wl[m];
+  k.style.left = (i * ww) + "%"; k.style.width = ww + "%"; k.textContent = wl(m);
   if (m === 60) { const s = document.createElement("span"); s.className = "mid"; s.textContent = "middle C"; k.appendChild(s); }
-  kbd.appendChild(k); keyEl[m] = k; });
-Object.entries(blacks).forEach(([m, i]) => { const k = document.createElement("div"); k.className = "bk" + (used.has(+m) ? " used" : "");
-  k.style.left = ((i + 1) * ww - ww * 0.3) + "%"; k.style.width = (ww * 0.6) + "%"; if (+m === 66) k.textContent = "F#";
-  kbd.appendChild(k); keyEl[m] = k; });
+  kbd.appendChild(k); keyEl[m] = k;
+  // black key between this white and the next one (after C, D, F, G, A)
+  if (i < whites.length - 1 && [0, 2, 5, 7, 9].includes(m % 12)) {
+    const b = document.createElement("div"); b.className = "bk" + (used.has(m + 1) ? " used" : "");
+    b.style.left = ((i + 1) * ww - ww * 0.3) + "%"; b.style.width = (ww * 0.6) + "%"; if ((m + 1) % 12 === 6) b.textContent = "F#";
+    kbd.appendChild(b); keyEl[m + 1] = b;
+  } });
 function keyOn(m, cls) { Object.values(keyEl).forEach(k => k.classList.remove("now", "on", "ok", "oops")); if (m && keyEl[m]) keyEl[m].classList.add(cls); }
 function keyFor(m) { if (keyEl[m]) return m; const pc = ((m % 12) + 12) % 12; return [60,61,62,63,64,65,66,67,68,69,70,71].find(x => x % 12 === pc); }
 
@@ -91,17 +94,20 @@ function playLines(lineIdxs, bpm) {
   if (!ctx || ctx.state !== "running") return Promise.resolve(false); // [R2] never pretend a silent demo happened
   const eighth = 30 / bpm; const lead = 0.15; const t0 = ctx.currentTime + lead;
   let t = 0;
+  const seq = []; lineIdxs.forEach(li => LINES[li].presses.forEach(p => seq.push(p)));
+  let k = 0;
   lineIdxs.forEach(li => {
     const line = LINES[li];
     timers.push(setTimeout(() => scrollToLine(li), (lead + t) * 1000));
     line.presses.forEach(p => {
-      const at = t, dur = p.len * eighth;
-      if (p.pitch) tone(p.pitch, t0 + at, dur);
+      const at = t, dur = p.len * eighth, next = seq[++k];
+      // a note tied into the next line keeps sounding through it
+      if (p.pitch) tone(p.pitch, t0 + at, dur + (next && next.hold === p.pitch ? next.len * eighth : 0));
       timers.push(setTimeout(() => {
         if (ctx.state !== "running") { stopSound(); return; } // [R2] audio got interrupted: abandon
         setPlaying(idxFor(li, p));
         if (p.pitch) { keyOn(p.pitch, "on"); if (mode === "listen") say(p.name + (p.word && !"_*".includes(p.word) ? "  ·  " + p.word : ""), "", line.say); }
-        else keyOn(null);
+        else if (!p.hold) keyOn(null);
       }, (lead + at) * 1000));
       t += dur;
     });
@@ -161,7 +167,7 @@ const DEAF_TAIL = 350; // ms ignored after the iPad itself makes a sound
 function deafFor(ms) { deafUntil = Math.max(deafUntil, performance.now() + ms); }
 
 function yin(x, sr) {
-  // YIN for 180..800 Hz (song range D4–E5). The 800 Hz ceiling avoids reading a strong 3rd harmonic as the note. [R12]
+  // YIN for 180..800 Hz (songs use A3–E5). The 800 Hz ceiling avoids reading a strong 3rd harmonic as the note. [R12]
   const minTau = Math.floor(sr / 800), maxTau = Math.ceil(sr / 180);
   const W = Math.min(x.length - maxTau, 1024);
   if (W <= 0) return null;
