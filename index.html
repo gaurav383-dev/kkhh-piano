@@ -83,6 +83,7 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--rain); }
 .mic { display: flex; align-items: center; gap: 10px; font-size: .85rem; color: var(--muted); font-weight: 700; }
 .meter { flex: 0 0 90px; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
 .meter i { display: block; height: 100%; width: 0; background: var(--good); transition: width .05s linear; }
+.diag { font-size: .7rem; font-weight: 600; opacity: .7; }
 .heard { font-variant-numeric: tabular-nums; color: var(--ink); min-width: 4ch; }
 
 .kbd-scroll { overflow-x: auto; min-width: 0; }
@@ -182,14 +183,14 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--rain); }
       <div class="msg" id="msg">Press Play to listen</div>
       <div class="sub" id="sub"></div>
       <div class="stars" id="stars"></div>
-      <div class="mic" id="micRow" hidden>Mic <span class="meter"><i id="meter"></i></span> I hear <span class="heard" id="heard">–</span></div>
+      <div class="mic" id="micRow" hidden>Mic <span class="meter"><i id="meter"></i></span> I hear <span class="heard" id="heard">–</span> <span class="diag" id="diag"></span></div>
     </div>
     <div class="kbd-scroll"><div class="kbd" id="kbd"></div></div>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/abcjs@6.4.4/dist/abcjs-basic-min.js"></script>
-<script src="song.js"></script>
-<script src="app.js"></script>
+<script src="song.js?v=2"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

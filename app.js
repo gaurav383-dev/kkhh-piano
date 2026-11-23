@@ -177,6 +177,7 @@ function yin(x, sr) {
   return { freq: sr / (tau + shift), conf: 1 - b };
 }
 
+let diagTick = 0;
 let lastRms = [], lastFast = [], pending = null, lastOnset = 0, stable = { midi: null, n: 0, fired: false }, lastNoteMidi = null, idleRms = [];
 function resetDetector() { lastRms = []; lastFast = []; pending = null; stable = { midi: null, n: 0, fired: false }; lastNoteMidi = null; needAttack = true; }
 function micTick() {
@@ -188,6 +189,7 @@ function micTick() {
   let f = 0; const FW = 480; for (let i = buf.length - FW; i < buf.length; i++) f += buf[i] * buf[i];
   const fast = Math.sqrt(f / FW);
   $("meter").style.width = Math.min(100, rms / 0.08 * 100) + "%";
+  if (++diagTick % 50 === 0) micDiag(rms);
   const now = performance.now();
   const prevMin = lastRms.length ? Math.min(...lastRms) : rms;
   const prevFastMin = lastFast.length ? Math.min(...lastFast) : fast;
@@ -223,6 +225,31 @@ function micTick() {
 }
 
 const micSession = { starting: false, cancelled: false };
+let micNodes = [];
+// Wire the mic into the current audio context and listen for ~0.8 s.
+// The analyser feeds a silent gain into the speakers: Safari only processes nodes that reach the output.
+async function wireMic(stream) {
+  if (ctx.state !== "running") { try { await Promise.race([ctx.resume(), sleep(1000)]); } catch (e) {} }
+  const src = ctx.createMediaStreamSource(stream);
+  const an = ctx.createAnalyser(); an.fftSize = 2048; src.connect(an);
+  const sink = ctx.createGain(); sink.gain.value = 0; an.connect(sink); sink.connect(ctx.destination);
+  micNodes = [src, an, sink];
+  const b = new Float32Array(an.fftSize), samples = []; let peak = 0;
+  for (let i = 0; i < 16 && !micSession.cancelled; i++) {
+    await sleep(50);
+    an.getFloatTimeDomainData(b); let s = 0;
+    for (let j = 0; j < b.length; j++) { s += b[j] * b[j]; const a = Math.abs(b[j]); if (a > peak) peak = a; }
+    samples.push(Math.sqrt(s / b.length));
+  }
+  return { an, b, samples, peak };
+}
+function unwireMic() { micNodes.forEach(n => { try { n.disconnect(); } catch (e) {} }); micNodes = []; }
+function micDiag(peak) {
+  const t = micStream && micStream.getAudioTracks()[0];
+  const d = (ctx ? Math.round(ctx.sampleRate / 100) / 10 + " kHz · " + ctx.state : "no audio") +
+    (t ? " · mic " + t.readyState + (t.muted ? " (muted)" : "") : "") + " · level " + (peak || 0).toFixed(4);
+  $("diag").textContent = d; return d;
+}
 async function startMic() {
   if (micStream) return "ok";
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return "nomic";
@@ -232,21 +259,21 @@ async function startMic() {
   catch (e) { micSession.starting = false; return "denied"; }
   if (micSession.cancelled) { stream.getTracks().forEach(t => t.stop()); micSession.starting = false; return "cancelled"; } // [R1]
   micStream = stream;
-  const src = ctx.createMediaStreamSource(stream);
-  const an = ctx.createAnalyser(); an.fftSize = 2048; src.connect(an);
-  const b = new Float32Array(an.fftSize);
-  stream.getAudioTracks().forEach(t => { t.onmute = () => micLost(); t.onended = () => micLost(); }); // [R4]
-  // measure the room (~0.8 s), using the quieter frames [R10]
-  const samples = [];
-  for (let i = 0; i < 16 && !micSession.cancelled; i++) {
-    an.getFloatTimeDomainData(b); let s = 0; for (let j = 0; j < b.length; j++) s += b[j] * b[j];
-    samples.push(Math.sqrt(s / b.length)); await sleep(50);
+  let r = await wireMic(stream);
+  if (r.peak === 0 && !micSession.cancelled) {
+    // On iPad an audio context made before the mic opened can receive pure silence. Rebuild it once and retry.
+    unwireMic(); try { ctx.close(); } catch (e) {}
+    ctx = null; audioCtx();
+    r = await wireMic(stream);
   }
   micSession.starting = false;
   if (micSession.cancelled) { stopMic(); return "cancelled"; }
-  samples.sort((a, c) => a - c);
+  micDiag(r.peak);
+  if (r.peak === 0) { stopMic(); return "silent"; }
+  stream.getAudioTracks().forEach(t => { t.onmute = () => micLost(); t.onended = () => micLost(); }); // [R4]
+  const samples = r.samples.slice().sort((a, c) => a - c);
   noiseFloor = Math.min(0.01, Math.max(0.0015, samples[Math.floor(samples.length * 0.25)]));
-  analyser = an; buf = b; idleRms = []; resetDetector();
+  analyser = r.an; buf = r.b; idleRms = []; resetDetector();
   micTimer = setInterval(micTick, 20);
   $("micRow").hidden = false;
   return "ok";
@@ -254,6 +281,7 @@ async function startMic() {
 function stopMic() {
   micSession.cancelled = true;
   clearInterval(micTimer); micTimer = null;
+  unwireMic();
   if (micStream) micStream.getTracks().forEach(t => { t.onmute = null; t.onended = null; t.stop(); });
   micStream = null; analyser = null; $("micRow").hidden = true;
 }
@@ -385,6 +413,7 @@ $("startLesson").addEventListener("click", async () => {
   say("Listening to the room…", "", "Stay quiet for a second");
   const r = await startMic();
   if (lesson.session !== s || r === "cancelled") return;
+  if (r === "silent") { resetButtons(); say("The mic is on but I hear silence", "bad", "Tap Start lesson again. If it repeats, close this Safari tab fully, reopen the page and try once more. (" + $("diag").textContent + ")"); return; }
   if (r !== "ok") { resetButtons(); say("I can't hear the piano yet", "bad", r === "nomic" ? "Teacher mode needs Safari on the iPad (it doesn't work inside the Claude app preview)." : "Allow the microphone for this page: in Safari tap aA › Website Settings › Microphone › Allow, then try again."); return; }
   lesson.on = true; lesson.order = ORDER[$("tPart").value]; lesson.pos = 0; lesson.clean = 0; starsEl.textContent = "";
   beginLine(s);
